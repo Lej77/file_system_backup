@@ -13,9 +13,7 @@ use std::{
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use clap::Parser;
-#[cfg(windows)]
-use color_eyre::eyre::bail;
-use color_eyre::eyre::{Context, eyre};
+use color_eyre::eyre::{Context, bail, eyre};
 use flate2::{Compression, write::GzEncoder};
 use indicatif::HumanBytes;
 use jwalk::DirEntry;
@@ -26,7 +24,9 @@ use ntfs::{
 };
 
 use crate::{
-    CancelSignal, CommonOpt, Result, RsyncableOpts, WizTreeCsvRecord, fs_index::{FsEntryMetadata, FsIndex, FsIndexBuildOptions}, utils::{Rsyncable, create_file},
+    CancelSignal, CommonOpt, Result, RsyncableOpts, WizTreeCsvRecord,
+    fs_index::{FsEntryMetadata, FsIndex, FsIndexBuildOptions},
+    utils::{Rsyncable, create_file},
 };
 
 mod sector_reader;
@@ -116,8 +116,10 @@ pub struct BackupOpts {
 impl BackupOpts {
     pub fn run(self, cancel_signal: &CancelSignal) -> Result<()> {
         #[cfg(windows)]
+        let is_admin = ::is_elevated::is_elevated();
+        #[cfg(not(windows))]
+        let is_admin = true;
         {
-            let is_admin = ::is_elevated::is_elevated();
             if !is_admin && !self.prefer_non_admin_scan {
                 if self.allow_non_admin_scan {
                     log::info!(
@@ -130,8 +132,6 @@ impl BackupOpts {
                 }
             }
         }
-        #[cfg(not(windows))]
-        let is_admin = true;
 
         let _low_priority_guard = if self.normal_priority || cfg!(not(windows)) {
             None
