@@ -1,0 +1,127 @@
+[package]
+name = "file_system_backup"
+version = "0.1.0"
+authors = ["Lej77 <31554212+Lej77@users.noreply.github.com>"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Lej77/file_system_backup/"
+description = """
+A tool for saving/managing backups of a file system's index, that is to say the names and sizes of files and directories.
+"""
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["gzip_better", "web_dav", "winfsp", "lexical_sort"]
+
+gzip_better = ["flate2/zlib-ng"] # This matters a lot for the space saving of the --rsyncable flag
+gzip_rust = ["flate2/rust_backend"] # Avoids the need for a c compiler
+
+# WebDAV based in-memory file system for temp files:
+web_dav = [
+    "dep:dav-server",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tokio",
+    "dep:fastrand",
+    "dep:http",
+    "dep:bytes",
+    "dep:futures-util",
+    "dep:libc",
+]
+# Fuse like file system on Windows
+winfsp = [
+    "dep:winfsp",
+    "dep:windows",
+    "dep:libc",
+]
+# Use the WinFsp library ".dll" that is installed on the system otherwise we need to place the ".dll" manually next to the ".exe" or add the ".dll" to PATH:
+winfsp_system = ["winfsp?/system"]
+# Write extra debug info to stdout:
+winfsp_debug = ["winfsp?/debug"]
+
+# Use Unicode aware sorting of file/folder names (affect creation of WizTree backup files)
+icu_sort = ["dep:icu"]
+lexical_sort = ["dep:lexical-sort"]
+
+[dependencies]
+# CLI
+clap = { version = "4.4.11", features = ["derive"] } # Command line argument parsing.
+color-eyre = "0.5.11" # Nice error messages
+ctrlc = { version = "3.2.0", features = ["termination"] } # Alternative: `signal-hook` (note that it only has limited support for windows)
+indicatif = "0.17.0" # Progress bars
+
+tempfile = "3.2.0"
+is_elevated = "0.1.2" # Alternatives: `deelevate` or maybe "runas"
+thread_priority = { git = "https://github.com/Lej77/thread_priority.git", tag = "v0.1.0" }
+sysinfo = { version = "0.29.11", default-features = false } # Get information about processes that are spawned by WizTree
+
+num-traits = "0.2.6"
+num-derive = "0.4.0"
+
+# WebDAV temp file system:
+dav-server = { version = "0.11.0", optional = true, default-features = false, features = [] } # WebDAV file system to keep temp files in RAM
+hyper = { version = "1.0.0", optional = true, features = ["server", "http1", "http2"] } # HTTP server for WebDAV
+hyper-util = { version = "0.1", optional = true, features = ["server", "http1", "http2", "tokio"] }
+tokio = { version = "1.35.1", optional = true, features = ["sync", "net", "rt-multi-thread"] } # Async runtime for hyper
+fastrand = { version = "2.0.1", optional = true } # Random name for symlink to WebDAV file system
+http = { version = "1.0.0", optional = true } # Used by memfs
+bytes = { version = "1.0.0", optional = true } # Used by memfs
+futures-util = { version = "0.3.16", optional = true } # Used by memfs
+libc = { version = "0.2.0", optional = true } # Used by memfs
+urlencoding = "2.1.3" # Paths are URL encoded in WebDAV, also in QDirStat file
+
+# Logging:
+log = "0.4.14"
+env_logger = "0.11.11"
+chrono = "0.4.15"
+
+# WizTree CSV file:
+csv = "1.1.6" # WizTree csv format
+serde = { version = "1.0.130", features = ["derive"] } # WizTree csv format
+flate2 = { version = "1.0", default-features = false } # Compressed input/output
+icu = { version = "2.0", optional = true } # Sort file/folder names in same order as WizTree
+lexical-sort = { version = "0.3.1", optional = true }
+
+# Mount WizTree file (also need fake filesystem, i.e. FUSE or similar):
+unicase = "2.9.0" # Case insensitive strings for filesystem paths
+
+# Traverse and collect filesystem info:
+jwalk = "0.8" # Parallel filesystem walk
+ntfs = "0.4.0" # Parse Master File Table for faster filesystem info
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+win32job = "1.0.1" # Ensure spawned processes are killed if the parent process is killed. (Can also set other limits such as RAM usage)
+winapi = { version = "0.3.9", features = ["winbase", "winnt", "sysinfoapi"] }
+
+# WinFsp (FUSE-like) file system:
+# Requires clang, install it with `choco install llvm`
+winfsp = { version = "0.13", optional = true, default-features = false, features = ["delayload"] }
+# Setup:
+# 1. https://github.com/SnowflakePowered/winfsp-rs/blob/master/filesystems/ntptfs-winfsp-rs/src/main.rs#L43-L55
+# 2. https://github.com/SnowflakePowered/winfsp-rs/blob/master/filesystems/ntptfs-winfsp-rs/src/service.rs
+# 3. https://github.com/SnowflakePowered/winfsp-rs/blob/master/filesystems/ntptfs-winfsp-rs/src/fs/ntptfs.rs
+# 4. https://github.com/SnowflakePowered/winfsp-rs/blob/master/filesystems/ntptfs-winfsp-rs/src/fs/context.rs
+#   - This is where the main logic resides.
+windows = { version = "0.61.0", optional = true, features = [
+    "Win32",
+    "Win32_Foundation",
+    "Win32_Storage",
+    "Win32_Storage_FileSystem",
+    "Wdk_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_Ioctl", "Win32_System_IO"] }
+
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winfsp = { version = "0.13.0", optional = true, default-features = false, features = ["build", "delayload"] }
+
+# Need to compile compression library with optimizations or it will be very slow
+[profile.dev.package.flate2]
+opt-level = 3
+
+
+[[bin]]
+name = "file-system-backup" # Names of CLI tools use kebab-case by convention.
+path = "src/main.rs"
+required-features = []
