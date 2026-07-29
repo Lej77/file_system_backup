@@ -1444,7 +1444,7 @@ dependencies = [
 [[package]]
 name = "edirstat"
 version = "2.0.1-extra.1"
-source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#e2862634b40d0d46371592f2454f98d6428e330e"
+source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#80e3c00cb28442a03607b2a194578c2bf68dd1e4"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1456,18 +1456,16 @@ dependencies = [
  "edirstat-core",
  "edirstat-gui",
  "eframe",
- "mimalloc-rspack",
  "parking_lot",
  "rayon",
  "smallvec",
  "sysinfo 0.39.6",
- "winresource",
 ]
 
 [[package]]
 name = "edirstat-core"
 version = "2.0.1-extra.1"
-source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#e2862634b40d0d46371592f2454f98d6428e330e"
+source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#80e3c00cb28442a03607b2a194578c2bf68dd1e4"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -1485,7 +1483,7 @@ dependencies = [
 [[package]]
 name = "edirstat-gui"
 version = "2.0.1-extra.1"
-source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#e2862634b40d0d46371592f2454f98d6428e330e"
+source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#80e3c00cb28442a03607b2a194578c2bf68dd1e4"
 dependencies = [
  "ahash",
  "atomic-progress",
@@ -2379,7 +2377,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.19",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -2635,7 +2633,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -3499,15 +3497,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "mimalloc-rspack"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de20bb33bf95d9c060030d53bcb5d5dc03cbbedfbd1dcda5f6f285b946dae2c0"
-dependencies = [
- "rspack-libmimalloc-sys",
 ]
 
 [[package]]
@@ -4744,16 +4733,6 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "serde",
-]
-
-[[package]]
-name = "rspack-libmimalloc-sys"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c741844b1fbe0cfbae8dfeb73b5e5fdc95daf7be58bdd72afb3fd85c86bccdb"
-dependencies = [
- "cc",
- "libc",
 ]
 
 [[package]]
@@ -6738,16 +6717,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "winresource"
-version = "0.1.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0986a8b1d586b7d3e4fe3d9ea39fb451ae22869dcea4aa109d287a374d866087"
-dependencies = [
- "toml",
- "version_check",
 ]
 
 [[package]]
