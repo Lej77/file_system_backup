@@ -193,10 +193,13 @@ impl WizTreeBackupOpts {
         #[cfg(feature = "web_dav")]
         let tokio_rt;
         if let Some(temp_file_system) = self.temp_file_system {
-            let s: String = std::iter::repeat_with(fastrand::alphanumeric)
-                .take(10)
-                .collect();
-            let expose_at = std::env::temp_dir().join(format!("WizTree-file-index-export-{s}"));
+            #[cfg(any(feature = "winfsp", feature = "web_dav"))]
+            let expose_at = {
+                let s: String = std::iter::repeat_with(fastrand::alphanumeric)
+                    .take(10)
+                    .collect();
+                std::env::temp_dir().join(format!("WizTree-file-index-export-{s}"))
+            };
 
             match temp_file_system {
                 FileSystemType::WinFsp => {

@@ -880,7 +880,6 @@ impl Error for GetMftError {}
 
 pub fn get_mft_path<P: AsRef<Path>>(path: P) -> Result<OsString, GetMftError> {
     let volume_root = resolve_volume_root(path.as_ref())?;
-    ensure_ntfs(volume_root.as_ref())?;
 
     #[cfg(windows)]
     {
@@ -893,6 +892,8 @@ pub fn get_mft_path<P: AsRef<Path>>(path: P) -> Result<OsString, GetMftError> {
     }
     #[cfg(target_os = "linux")]
     {
+        ensure_ntfs(volume_root.as_ref())?;
+
         Ok(volume_root)
     }
 }

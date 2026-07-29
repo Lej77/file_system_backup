@@ -137,7 +137,7 @@ fn bytes_from_os_string(text: &OsStr) -> Vec<u8> {
     {
         text.encode_wide()
             .flat_map(|v| v.to_le_bytes())
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
     }
     #[cfg(unix)]
     {

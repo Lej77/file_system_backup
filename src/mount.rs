@@ -1,6 +1,6 @@
 //! Mount a fake filesystem where files from a backup can be viewed.
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "web_dav"))]
 use std::path::{Component, Prefix};
 use std::{
     ffi::OsStr,

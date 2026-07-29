@@ -9,8 +9,6 @@ use std::{
 };
 
 use clap::{ArgAction, Args, Parser, ValueEnum};
-#[cfg(windows)]
-use color_eyre::eyre::Context;
 use color_eyre::{Help, eyre::Report};
 use indicatif::{ProgressBar, WeakProgressBar};
 
@@ -168,6 +166,8 @@ impl Opts {
             Self::Diff(v) => v.run(cancel_signal),
             #[cfg(all(windows, feature = "winfsp"))]
             Self::TestWinFsp => {
+                use color_eyre::eyre::Context;
+
                 winfsp::winfsp_init().map_err(|e| {
                     let report = color_eyre::eyre::eyre!("{e:?}\n{e}");
                     if let winfsp::FspError::WIN32(1285) = e {
