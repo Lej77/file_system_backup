@@ -54,9 +54,11 @@ impl CompressibleFsIndex {
                     data
                 } else {
                     Arc::from(
-                        WizTreeCsvRecord::create_compressed_csv(
-                            index.csv_iter(None, DEFAULT_PATH_SEPARATOR, false),
-                        )
+                        WizTreeCsvRecord::create_compressed_csv(index.csv_iter(
+                            None,
+                            DEFAULT_PATH_SEPARATOR,
+                            false,
+                        ))
                         .expect("failed to serialize and compress filesystem index"),
                     )
                 };

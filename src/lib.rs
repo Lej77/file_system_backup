@@ -16,6 +16,10 @@ pub mod backup;
 pub mod cancellation;
 pub mod cleanup;
 pub mod diff;
+#[cfg(any(feature = "edirstat", feature = "edirstat_backup"))]
+pub mod edirstat_snapshot;
+#[cfg(feature = "edirstat_backup")]
+pub mod embedded_edirstat_backup;
 pub mod fs_index;
 pub mod mount;
 #[cfg(unix)]
@@ -141,6 +145,8 @@ pub enum Opts {
     /// rights.
     #[clap(version, author)]
     Backup(backup::BackupOpts),
+    #[cfg(feature = "edirstat_backup")]
+    EmbeddedEDirStatBackup(embedded_edirstat_backup::EDirStatBackupOpts),
     /// Mount a backup file as a fake filesystem to easily inspects it content.
     #[clap(version, author)]
     Mount(mount::MountOpts),
@@ -162,6 +168,8 @@ impl Opts {
             #[cfg(unix)]
             Self::QDirStatOpen(v) => v.run(cancel_signal),
             Self::Backup(v) => v.run(cancel_signal),
+            #[cfg(feature = "edirstat_backup")]
+            Self::EmbeddedEDirStatBackup(v) => v.run(cancel_signal),
             Self::Mount(v) => v.run(cancel_signal),
             Self::Diff(v) => v.run(cancel_signal),
             #[cfg(all(windows, feature = "winfsp"))]
@@ -251,6 +259,8 @@ impl Opts {
             #[cfg(unix)]
             Self::QDirStatOpen(v) => v.common.configure_logging(),
             Self::Backup(v) => v.common.configure_logging(),
+            #[cfg(feature = "edirstat_backup")]
+            Self::EmbeddedEDirStatBackup(v) => v.common.configure_logging(),
             Self::Mount(v) => v.common.configure_logging(),
             Self::Diff(v) => v.common.configure_logging(),
             #[cfg(all(windows, feature = "winfsp"))]

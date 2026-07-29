@@ -856,13 +856,13 @@ impl FsIndex {
     ///
     /// # Panics
     ///
-    /// - When [`EntryMetadata::is_dir`] is `false`:
+    /// - When [`FsEntryMetadata::is_dir`] is `false`:
     ///   - The `children` argument must be `None`.
-    ///   - The [`EntryMetadata::children`] must be `None`.
+    ///   - The [`FsEntryMetadata::children`] must be `None`.
     ///
-    /// - When [`EntryMetadata::is_dir`] is `true`:
+    /// - When [`FsEntryMetadata::is_dir`] is `true`:
     ///   - The `children` argument must be `Some`.
-    ///   - The [`EntryMetadata::children`] must be `Some` and the count must
+    ///   - The [`FsEntryMetadata::children`] must be `Some` and the count must
     ///     match the length of the `Vec` in the `children` argument.
     pub fn add_entry(
         &mut self,
@@ -900,8 +900,8 @@ impl FsIndex {
     ///
     /// # Panics
     ///
-    /// - If the [`EntryMetadata::children`] field is `Some`.
-    /// - If the [`EntryMetadata::is_dir`] field is `true`.
+    /// - If the [`FsEntryMetadata::children`] field is `Some`.
+    /// - If the [`FsEntryMetadata::is_dir`] field is `true`.
     pub fn add_file(&mut self, metadata: FsEntryMetadata) -> FsMetadataId {
         self.add_entry(metadata, None)
     }
@@ -910,8 +910,8 @@ impl FsIndex {
     ///
     /// # Panics
     ///
-    /// - If the [`EntryMetadata::children`] field is `None`.
-    /// - If the [`EntryMetadata::is_dir`] field is `false`.
+    /// - If the [`FsEntryMetadata::children`] field is `None`.
+    /// - If the [`FsEntryMetadata::is_dir`] field is `false`.
     pub fn add_folder(&mut self, metadata: FsEntryMetadata) -> FsFolderWriter<'_> {
         let info_index = FsMetadataId(
             NonZeroU32::new(u32::try_from(self.buffer.len()).expect("buffer size exceeded 32bit"))
@@ -1042,6 +1042,9 @@ impl FsIndex {
     }
 
     /// Construct a file index from WizTree CSV records.
+    // TODO(pref): refactor this method and expose a more low-level method that is
+    // still convenient to construct an FsIndex without providing full file
+    // paths.
     pub fn from_csv_records_with_root(
         iter: impl IntoIterator<Item = WizTreeCsvRecord>,
         root: &WizTreeCsvRecord,
@@ -1058,25 +1061,21 @@ impl FsIndex {
             parents: &mut Vec<FolderInfo>,
             root_id: FsEntryId,
             keep: usize,
-            #[cfg(feature = "icu_sort")] collator: Option<&CollatorBorrowed<'static>>,
-            #[cfg(not(feature = "icu_sort"))] collator: Option<&()>,
+            name_comparer: Option<&StringComparer>,
             options: &FsIndexBuildOptions<'_>,
         ) {
             while parents.len() > keep {
                 let mut folder = parents.pop().unwrap();
                 if options.resort
-                    && let Some(_collator) = collator
+                    && let Some(name_comparer) = name_comparer
                 {
                     folder
                         .children
                         .sort_by(|(a_name, a_is_dir, _), (b_name, b_is_dir, _)| {
-                            a_is_dir.cmp(b_is_dir).reverse().then_with(|| {
-                                cfg_select! {
-                                    feature = "icu_sort" => _collator.compare(a_name, b_name),
-                                    feature = "lexical_sort" => lexical_sort::natural_lexical_cmp(a_name, b_name),
-                                    _ => a_name.cmp(b_name),
-                                }
-                            })
+                            a_is_dir
+                                .cmp(b_is_dir)
+                                .reverse()
+                                .then_with(|| name_comparer.compare_strings(a_name, b_name))
                         });
                 }
                 folder.info.children = Some(folder.children.len() as u32);
@@ -1105,19 +1104,7 @@ impl FsIndex {
             }
         }
 
-        #[allow(clippy::unnecessary_lazy_evaluations)]
-        let collator = options.resort.then(|| {
-            cfg_select! {
-                feature = "icu_sort" => {
-                    // Force "und" (Undefined/Root locale) for fixed, platform-independent collation
-                    let mut options = CollatorOptions::default();
-                    options.strength = Some(Strength::Secondary); // Case-insensitive collation
-
-                    Collator::try_new(locale!("und").into(), options).expect("Failed to initialize ICU")
-                }
-                _ => {},
-            }
-        });
+        let name_comparer = options.resort.then(StringComparer::new);
 
         let iter = iter.into_iter();
         let mut parents = Vec::<FolderInfo>::new();
@@ -1177,7 +1164,7 @@ impl FsIndex {
                             &mut parents,
                             root_id,
                             parent_ix,
-                            collator.as_ref(),
+                            name_comparer.as_ref(),
                             &options,
                         );
                         debug_assert!(parents.get(parent_ix).is_none());
@@ -1244,7 +1231,7 @@ impl FsIndex {
             &mut parents,
             root_id,
             0,
-            collator.as_ref(),
+            name_comparer.as_ref(),
             &options,
         );
         this.shrink_to_fit();
@@ -1285,6 +1272,42 @@ impl FsIndex {
     }
 }
 impl Default for FsIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Compares file names.
+///
+/// How the names are compared depends on the compile time features of this crate.
+pub struct StringComparer {
+    #[cfg(feature = "icu_sort")]
+    collator: CollatorBorrowed<'static>,
+    _private: (),
+}
+impl StringComparer {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(feature = "icu_sort")]
+            collator: {
+                // Force "und" (Undefined/Root locale) for fixed, platform-independent collation
+                let mut options = CollatorOptions::default();
+                options.strength = Some(Strength::Secondary); // Case-insensitive collation
+
+                Collator::try_new(locale!("und").into(), options).expect("Failed to initialize ICU")
+            },
+            _private: (),
+        }
+    }
+    pub fn compare_strings(&self, a: &str, b: &str) -> std::cmp::Ordering {
+        cfg_select! {
+            feature = "icu_sort" => self.collator.compare(a, b),
+            feature = "lexical_sort" => lexical_sort::natural_lexical_cmp(a, b),
+            _ => a.cmp(b),
+        }
+    }
+}
+impl Default for StringComparer {
     fn default() -> Self {
         Self::new()
     }

@@ -376,6 +376,16 @@ impl CancelSignal {
     pub fn wrap_io<T>(&self, io_type: T) -> CancelableIo<T> {
         CancelableIo(io_type, self.clone())
     }
+
+    /// Returns a future that can be used to wait for cancellation.
+    ///
+    /// The future has some useful methods, for example
+    /// [`WaitForCancelSignalFuture::set_waker_from_closure`] that allows
+    /// running a callback when the signal is cancelled. The callback will be
+    /// canceled if the future is dropped.
+    pub fn wait_future(&self) -> WaitForCancelSignalFuture {
+        WaitForCancelSignalFuture::new(self.clone())
+    }
 }
 impl Default for CancelSignal {
     fn default() -> Self {

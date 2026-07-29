@@ -1,5 +1,3 @@
-use std::process::abort;
-
 use clap::Parser;
 use color_eyre::eyre::Context;
 use file_system_backup::*;
@@ -27,7 +25,7 @@ fn main() -> Result<()> {
             should_quit.cancel_with_reason("Ctrl-C signal");
             if second_signal {
                 eprintln!("Received second Ctrl-C signal, terminating current process immediately");
-                abort()
+                std::process::exit(100);
             } else {
                 log::info!("Received Ctrl-C signal, cancelling all operations");
             }
