@@ -9,10 +9,11 @@ use color_eyre::eyre::{Context as _, bail, eyre};
 use flate2::{Compression, write::GzEncoder};
 
 use crate::{
-    BackupFileType, CancelSignal, CommonOpt, Result, RsyncableOpts, WizTreeCsvRecord,
+    BackupFileType, CancelSignal, Result, RsyncableOpts, WizTreeCsvRecord,
     fs_index::{
         DEFAULT_PATH_SEPARATOR, FsCursor, FsEntry, FsEntryId, FsIndex, FsIndexBuildOptions,
     },
+    logging::CommonOpt,
     utils::{Rsyncable, create_file},
 };
 
@@ -117,7 +118,7 @@ pub struct DiffOpts {
 impl DiffOpts {
     fn load_backup_file(input: &Path, mut file_type: BackupFileType) -> Result<FsIndex> {
         if BackupFileType::Auto == file_type
-            && let Some(ext_file_type) = BackupFileType::from_file_path_ext(input)
+            && let Some(ext_file_type) = BackupFileType::from_file_path(input)
         {
             file_type = ext_file_type;
         }
@@ -127,25 +128,28 @@ impl DiffOpts {
                 please specify it manually via the `--file-type` option"
             )
         }
+        file_type
+            .ensure_valid_type(&[BackupFileType::WizTreeCsv, BackupFileType::WizTreeCsvGzip])
+            .context("Invalid file type for input")?;
 
         let mut file = File::open(input)
             .wrap_err_with(|| format!(r#"failed to open input file at: "{}""#, input.display()))?;
 
         let fs_index: FsIndex = match file_type {
-            BackupFileType::Auto => unreachable!("checked for this previously"),
-            BackupFileType::CompressedCsv => {
+            BackupFileType::WizTreeCsvGzip => {
                 let mut data = Vec::new();
                 file.read_to_end(&mut data)
                     .wrap_err("Failed to read input data")?;
                 FsIndex::try_from_csv_records(
-                    WizTreeCsvRecord::parse_compressed_csv(&data),
+                    WizTreeCsvRecord::parse_compressed_csv::<&[u8]>(&data),
                     FsIndexBuildOptions::default(),
                 )?
             }
-            BackupFileType::UncompressedCsv => FsIndex::try_from_csv_records(
+            BackupFileType::WizTreeCsv => FsIndex::try_from_csv_records(
                 WizTreeCsvRecord::parse_uncompressed_csv(&mut file),
                 FsIndexBuildOptions::default(),
             )?,
+            _ => unreachable!("checked for this previously"),
         };
 
         Ok(fs_index)

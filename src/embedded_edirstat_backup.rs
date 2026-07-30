@@ -11,9 +11,10 @@ use edirstat_core::state::SharedState;
 use flate2::{Compression, write::GzEncoder};
 
 use crate::{
-    CancelSignal, CommonOpt, Result, RsyncableOpts, WizTreeCsvRecord,
+    CancelSignal, Result, RsyncableOpts, WizTreeCsvRecord,
     edirstat_snapshot::from_edirstat_snapshot,
     fs_index::FsIndexBuildOptions,
+    logging::CommonOpt,
     utils::{Rsyncable, create_file},
 };
 
@@ -269,22 +270,22 @@ impl EDirStatBackupOpts {
 }
 
 pub fn can_scan_using_mft(root_path: &Path) -> bool {
+    let Some(fs_type) = edirstat::mft::get_fs_type(root_path) else {
+        return false;
+    };
+    if !edirstat::mft::is_ntfs_type(&fs_type) {
+        return false;
+    };
+    let Some(_volume_path) = edirstat::mft::get_volume_path(root_path) else {
+        return false;
+    };
     #[cfg(windows)]
     {
         is_elevated::is_elevated()
     }
     #[cfg(target_os = "linux")]
     {
-        let Some(fs_type) = edirstat::mft::get_fs_type(root_path) else {
-            return false;
-        };
-        if !edirstat::mft::is_ntfs_type(&fs_type) {
-            return false;
-        };
-        let Some(volume_path) = edirstat::mft::get_volume_path(root_path) else {
-            return false;
-        };
-        std::fs::File::open(volume_path).is_ok()
+        std::fs::File::open(_volume_path).is_ok()
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {

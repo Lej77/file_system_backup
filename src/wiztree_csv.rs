@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use flate2::{Compression, bufread::MultiGzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 
 pub mod serde_quoted_string {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -75,9 +75,9 @@ pub struct WizTreeCsvRecord {
 }
 impl WizTreeCsvRecord {
     /// Parse WizTree records from a Gzip compressed CSV.
-    pub fn parse_compressed_csv(
-        compressed_data: &[u8],
-    ) -> impl Iterator<Item = csv::Result<WizTreeCsvRecord>> + '_ {
+    pub fn parse_compressed_csv<R: BufRead>(
+        compressed_data: R,
+    ) -> impl Iterator<Item = csv::Result<WizTreeCsvRecord>> {
         Self::parse_uncompressed_csv(MultiGzDecoder::new(compressed_data))
     }
 

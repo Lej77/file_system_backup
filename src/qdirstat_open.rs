@@ -9,11 +9,12 @@ use clap::Parser;
 use color_eyre::eyre::{Context, bail};
 use flate2::{Compression, write::GzEncoder};
 use indicatif::HumanBytes;
+use tempfile::TempPath;
 
 use crate::{
-    BackupFileType, CancelSignal, CommonOpt, Result,
+    BackupFileType, CancelSignal, Result,
     fs_index::{FsIndex, FsIndexBuildOptions},
-    set_progress_bar,
+    logging::{CommonOpt, set_progress_bar},
     utils::create_progress_bar,
     wiztree_csv::WizTreeCsvRecord,
 };
@@ -47,51 +48,52 @@ pub struct QDirStatOpenOpts {
 }
 
 impl QDirStatOpenOpts {
-    pub fn run(self, cancel_signal: &CancelSignal) -> Result<()> {
-        let temp_path;
-
+    /// Ensure there is a file with a QDirStat cache. Creates a temporary file
+    /// if necessary.
+    pub fn convert_to_qdirstat_cache(
+        &self,
+        cancel_signal: &CancelSignal,
+    ) -> Result<(Option<TempPath>, PathBuf)> {
         // 1. Detect file type
         let mut file_type = self.file_type;
         if BackupFileType::Auto == self.file_type
-            && let Some(ext) = self
-                .input
-                .as_ref()
-                .and_then(|i| i.extension())
-                .and_then(|ext| ext.to_str())
+            && let Some(input) = &self.input
+            && let Some(guessed_type) = BackupFileType::from_file_path(input)
         {
-            file_type = match ext.to_lowercase().as_str() {
-                "gz" => BackupFileType::CompressedCsv,
-                "csv" | "cache" => BackupFileType::UncompressedCsv,
-                _ => BackupFileType::Auto,
-            };
+            file_type = guessed_type;
         }
 
         if file_type == BackupFileType::Auto {
             bail!("Failed to determine file type. Specify manually via `--file-type`.");
         }
+        file_type
+            .ensure_valid_type(&[
+                BackupFileType::WizTreeCsv,
+                BackupFileType::WizTreeCsvGzip,
+                BackupFileType::QDirStatCache,
+                BackupFileType::QDirStatCacheGzip,
+            ])
+            .context("Invalid file type for input")?;
 
         // 2. Open input reader (File or Stdin)
         let mut _stdin = None;
-        let (input_reader, input_size): (Box<dyn Read>, Option<u64>) =
-            if let Some(input) = &self.input {
-                let file = File::open(input).wrap_err_with(|| {
-                    format!(r#"failed to open input file at: "{}""#, input.display())
-                })?;
-                let size = file.metadata().ok().map(|m| m.len());
-                (Box::new(file), size)
-            } else {
-                _stdin = Some(io::stdin());
-                (Box::new(_stdin.as_mut().unwrap().lock()), None)
-            };
+        let (reader, input_size): (Box<dyn Read>, Option<u64>) = if let Some(input) = &self.input {
+            let file = File::open(input).wrap_err_with(|| {
+                format!(r#"failed to open input file at: "{}""#, input.display())
+            })?;
+            let size = file.metadata().ok().map(|m| m.len());
+            (Box::new(file), size)
+        } else {
+            _stdin = Some(io::stdin());
+            (Box::new(_stdin.as_mut().unwrap().lock()), None)
+        };
 
         // Wrap input reader with progress tracking and cancellation handling
-        let cancel_reader = cancel_signal.wrap_io(input_reader);
         let pb = create_progress_bar(input_size);
         set_progress_bar(&pb);
-        pb.set_message("Converting WizTree CSV to compressed QDirStat cache...");
+        pb.set_message("Creating temp file with compressed QDirStat cache...");
 
-        let pb_reader = pb.wrap_read(cancel_reader);
-        let buf_reader = BufReader::new(pb_reader);
+        let mut reader = BufReader::new(pb.wrap_read(cancel_signal.wrap_io(reader)));
 
         // 3. Create target temp file with `.qdirstat.cache.gz` extension so QDirStat detects compression
         let temp_file = tempfile::Builder::new()
@@ -100,27 +102,57 @@ impl QDirStatOpenOpts {
             .tempfile()
             .wrap_err("Failed to create temporary compressed file for QDirStat")?;
 
+        if [
+            BackupFileType::QDirStatCache,
+            BackupFileType::QDirStatCacheGzip,
+        ]
+        .contains(&file_type)
         {
-            // 4. Setup Gzip Encoder
+            // TODO: if custom_root is specified then we should really convert the cache file.
+
+            if let Some(input) = &self.input {
+                // Forward existing file (QDirStat knows how to read it):
+                return Ok((None, input.clone()));
+            }
+            // QDirStat knows how to read the input data but it can't read from stdin, write to a temp file:
+            let mut gz_writer = None;
+            let mut writer: Box<dyn Write> = if file_type == BackupFileType::QDirStatCache {
+                // Compress to write less data to disk. (Also matches the file extension we use later.)
+                Box::new(BufWriter::new(gz_writer.get_or_insert(GzEncoder::new(
+                    temp_file.as_file(),
+                    Compression::fast(),
+                ))))
+            } else {
+                Box::new(temp_file.as_file())
+            };
+
+            std::io::copy(&mut reader, &mut writer)
+                .context("Failed to write stdin to temporary file")?;
+
+            writer.flush().wrap_err("Failed to flush cache writer")?;
+            drop(writer);
+            if let Some(gz_writer) = gz_writer {
+                gz_writer
+                    .finish()
+                    .wrap_err("Failed to finish Gzip compression stream")?;
+            }
+        } else {
+            // 4. Build in-memory FsIndex
+            let fs_index: FsIndex = match file_type {
+                BackupFileType::WizTreeCsv => FsIndex::try_from_csv_records(
+                    WizTreeCsvRecord::parse_compressed_csv(reader),
+                    FsIndexBuildOptions::default(),
+                )?,
+                BackupFileType::WizTreeCsvGzip => FsIndex::try_from_csv_records(
+                    WizTreeCsvRecord::parse_uncompressed_csv(reader),
+                    FsIndexBuildOptions::default(),
+                )?,
+                _ => unreachable!("handled this earlier"),
+            };
+
+            // 5. Setup Gzip Encoder
             let gz_writer = GzEncoder::new(temp_file.as_file(), Compression::fast());
             let mut writer = BufWriter::new(gz_writer);
-
-            // 5. Build iterator
-            let records_iter: Box<dyn Iterator<Item = csv::Result<WizTreeCsvRecord>>> =
-                match file_type {
-                    BackupFileType::CompressedCsv => {
-                        Box::new(WizTreeCsvRecord::parse_uncompressed_csv(
-                            flate2::read::MultiGzDecoder::new(buf_reader),
-                        ))
-                    }
-                    BackupFileType::UncompressedCsv => {
-                        Box::new(WizTreeCsvRecord::parse_uncompressed_csv(buf_reader))
-                    }
-                    _ => unreachable!(),
-                };
-
-            let fs_index =
-                FsIndex::try_from_csv_records(records_iter, FsIndexBuildOptions::default())?;
 
             for line in fs_index.qdirstat_iter(self.root.as_deref()) {
                 writeln!(writer, "{}", line)?;
@@ -139,23 +171,28 @@ impl QDirStatOpenOpts {
 
         if let Ok(meta) = temp_file.as_file().metadata() {
             log::info!(
-                "Converted and compressed cache size on disk: {}",
+                "Size on disk of compressed temporary cache file: {}",
                 HumanBytes(meta.len())
             );
         }
 
         // Convert TempFile to TempPath so the file handle is closed prior to spawning QDirStat
-        temp_path = temp_file.into_temp_path();
+        let temp_path = temp_file.into_temp_path();
         let file_to_open = temp_path.to_path_buf();
+        Ok((Some(temp_path), file_to_open))
+    }
 
-        // 7. Resolve `qdirstat` executable path
+    pub fn run(self, cancel_signal: &CancelSignal) -> Result<()> {
+        let (_temp_path_guard, file_to_open) = self.convert_to_qdirstat_cache(cancel_signal)?;
+
+        // Resolve `qdirstat` executable path
         let qdirstat_bin = self
             .qdirstat_path
             .unwrap_or_else(|| PathBuf::from("qdirstat"));
 
         log::info!("Launching QDirStat to view: {}", file_to_open.display());
 
-        // 8. Spawn QDirStat with `--cache`
+        // Spawn QDirStat with `--cache`
         let mut child = Command::new(&qdirstat_bin)
             .arg("--cache")
             .arg(&file_to_open)
@@ -167,7 +204,7 @@ impl QDirStatOpenOpts {
                 )
             })?;
 
-        // 9. Handle Process Lifecycle & Cancellation Signals
+        // Handle Process Lifecycle & Cancellation Signals
         loop {
             if let Ok(Some(status)) = child.try_wait() {
                 log::info!("QDirStat exited with status: {}", status);

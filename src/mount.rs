@@ -21,12 +21,12 @@ use flate2::{Compression, write::GzEncoder};
 use indicatif::HumanBytes;
 
 use crate::{
-    BackupFileType, CancelSignal, CommonOpt, FileSystemType, Result, WizTreeCsvRecord,
+    BackupFileType, CancelSignal, FileSystemType, Result, WizTreeCsvRecord,
     fs_index::{
         DEFAULT_PATH_SEPARATOR, FsCursor, FsEntryMetadata, FsIndex, FsIndexBuildOptions,
         PATH_SEPARATORS,
     },
-    set_progress_bar,
+    logging::{CommonOpt, set_progress_bar},
     utils::{TempDirPath, create_progress_bar},
 };
 #[cfg(windows)]
@@ -83,7 +83,8 @@ impl CompressibleFsIndex {
                     index
                 } else {
                     Arc::new(FsIndex::from_csv_records(
-                        WizTreeCsvRecord::parse_compressed_csv(data).map(Result::unwrap),
+                        WizTreeCsvRecord::parse_compressed_csv::<&[u8]>(&**data)
+                            .map(Result::unwrap),
                         FsIndexBuildOptions::default(),
                     ))
                 };
@@ -124,7 +125,7 @@ impl AutoCompressedFsIndex {
         let mut root: Option<WizTreeCsvRecord> = None;
         // Scan for errors:
         // TODO(perf): do error checking concurrently with constructing the cache
-        for (i, res) in WizTreeCsvRecord::parse_compressed_csv(&data).enumerate() {
+        for (i, res) in WizTreeCsvRecord::parse_compressed_csv::<&[u8]>(&*data).enumerate() {
             match res {
                 // For folders:
                 Ok(record) if record.file_name.ends_with(PATH_SEPARATORS) => {
@@ -148,7 +149,7 @@ impl AutoCompressedFsIndex {
         let root = root.ok_or_else(|| Report::msg("No info for root node found"))?;
 
         let cache = FsIndex::from_csv_records_with_root(
-            WizTreeCsvRecord::parse_compressed_csv(&data).map(Result::unwrap),
+            WizTreeCsvRecord::parse_compressed_csv::<&[u8]>(&*data).map(Result::unwrap),
             &root,
             FsIndexBuildOptions::default(),
         );
@@ -159,7 +160,7 @@ impl AutoCompressedFsIndex {
             );
             let perfect_recreation = Self::check_for_perfect_recreation_from_cache(
                 &cache,
-                WizTreeCsvRecord::parse_compressed_csv(&data).map(Result::unwrap),
+                WizTreeCsvRecord::parse_compressed_csv::<&[u8]>(&*data).map(Result::unwrap),
             );
             if perfect_recreation {
                 log::debug!(
@@ -341,7 +342,7 @@ impl MountOpts {
         let mut file_type = self.file_type;
         if BackupFileType::Auto == self.file_type
             && let Some(input) = &self.input
-            && let Some(ext_file_type) = BackupFileType::from_file_path_ext(input)
+            && let Some(ext_file_type) = BackupFileType::from_file_path(input)
         {
             file_type = ext_file_type;
         }
@@ -351,6 +352,9 @@ impl MountOpts {
                 please specify it manually via the `--file-type` option"
             )
         }
+        file_type
+            .ensure_valid_type(&[BackupFileType::WizTreeCsv, BackupFileType::WizTreeCsvGzip])
+            .context("Invalid file type for input")?;
 
         let (mut input, input_size) = if let Some(input) = &self.input {
             let file = Box::new(File::open(input).wrap_err_with(|| {
@@ -369,15 +373,14 @@ impl MountOpts {
         };
 
         let compressed_data: Vec<u8> = match file_type {
-            BackupFileType::Auto => unreachable!("checked for this previously"),
-            BackupFileType::CompressedCsv => {
+            BackupFileType::WizTreeCsvGzip => {
                 let mut data = Vec::new();
                 input
                     .read_to_end(&mut data)
                     .wrap_err("Failed to read input data")?;
                 data
             }
-            BackupFileType::UncompressedCsv => {
+            BackupFileType::WizTreeCsv => {
                 let mut data = Vec::new();
                 let pb = create_progress_bar(input_size);
                 set_progress_bar(&pb);
@@ -390,6 +393,7 @@ impl MountOpts {
                 pb.finish();
                 data
             }
+            _ => unreachable!("checked for this previously"),
         };
         log::info!(
             "Loaded compressed backup data into memory: {}",

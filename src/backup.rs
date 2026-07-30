@@ -24,8 +24,9 @@ use ntfs::{
 };
 
 use crate::{
-    CancelSignal, CommonOpt, Result, RsyncableOpts, WizTreeCsvRecord,
+    CancelSignal, Result, RsyncableOpts, WizTreeCsvRecord,
     fs_index::{FsEntryMetadata, FsIndex, FsIndexBuildOptions},
+    logging::CommonOpt,
     utils::{Rsyncable, create_file},
 };
 

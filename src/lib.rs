@@ -1,16 +1,9 @@
 #![warn(clippy::all)]
 
-use std::{
-    fmt,
-    io::{self, Write},
-    path::Path,
-    str::FromStr,
-    sync::RwLock,
-};
+use std::{fmt, path::Path, str::FromStr};
 
-use clap::{ArgAction, Args, Parser, ValueEnum};
+use clap::{Parser, ValueEnum};
 use color_eyre::{Help, eyre::Report};
-use indicatif::{ProgressBar, WeakProgressBar};
 
 pub mod backup;
 pub mod cancellation;
@@ -21,9 +14,12 @@ pub mod edirstat_snapshot;
 #[cfg(feature = "edirstat_backup")]
 pub mod embedded_edirstat_backup;
 pub mod fs_index;
+pub mod logging;
 pub mod mount;
 #[cfg(unix)]
 pub mod qdirstat_open;
+#[cfg(all(windows, feature = "winfsp"))]
+pub mod test_winfsp;
 pub mod utils;
 #[cfg(feature = "web_dav")]
 pub mod webdav_memfs;
@@ -88,6 +84,7 @@ pub enum Opts {
     #[clap(verbatim_doc_comment)]
     #[cfg(windows)]
     WizTreeBackup(wiztree_backup::WizTreeBackupOpts),
+
     /// Open a backup file with WizTree's UI.
     ///
     ///
@@ -136,27 +133,37 @@ pub enum Opts {
     #[clap(verbatim_doc_comment)]
     #[cfg(windows)]
     WizTreeOpen(wiztree_open::WizTreeOpenOpts),
+
     /// Open a backup file with QDirStat's UI.
     #[clap(version, author)]
     #[cfg(unix)]
     QDirStatOpen(qdirstat_open::QDirStatOpenOpts),
+
     /// Make a backup of file info by scanning the filesystem using OS APIs or
     /// more quickly by parsing the MFT of the disk if the program has admin
     /// rights.
     #[clap(version, author)]
     Backup(backup::BackupOpts),
+
+    /// Use code from eDirStat to backup filesystem information.
+    ///
+    /// Note: since the scanning code is built into the executable eDirStat does
+    /// NOT have to be installed.
     #[cfg(feature = "edirstat_backup")]
     EmbeddedEDirStatBackup(embedded_edirstat_backup::EDirStatBackupOpts),
+
     /// Mount a backup file as a fake filesystem to easily inspects it content.
     #[clap(version, author)]
     Mount(mount::MountOpts),
+
     /// Generate a new backup file that contains only folders and files that
     /// have changed when comparing two existing backups.
     #[clap(version, author)]
     Diff(diff::DiffOpts),
-    /// Setup a filesystem using WinFsp.
+
+    /// Setup an in-memory filesystem using WinFsp, i.e. a RAM disk.
     #[cfg(all(windows, feature = "winfsp"))]
-    TestWinFsp,
+    TestWinFsp(test_winfsp::TestWinFspOpts),
 }
 impl Opts {
     pub fn run(self, cancel_signal: &CancelSignal) -> Result<()> {
@@ -173,81 +180,7 @@ impl Opts {
             Self::Mount(v) => v.run(cancel_signal),
             Self::Diff(v) => v.run(cancel_signal),
             #[cfg(all(windows, feature = "winfsp"))]
-            Self::TestWinFsp => {
-                use color_eyre::eyre::Context;
-
-                winfsp::winfsp_init().map_err(|e| {
-                    let report = color_eyre::eyre::eyre!("{e:?}\n{e}");
-                    if let winfsp::FspError::WIN32(1285) = e {
-                        report.wrap_err(
-                            "The error code corresponds to ERROR_DELAY_LOAD_FAILED which means we failed to load \
-                            WinFsp's dynamically linked library (.dll), make sure that WinFsp is correctly installed."
-                        )
-                    } else {
-                        report
-                    }
-                }).wrap_err("Failed to initialize WinFsp")?;
-                let mut cx = winfsp_memfs::WinFspMemFsContext::new();
-                {
-                    let cx = std::sync::Arc::get_mut(&mut cx.shared)
-                        .unwrap()
-                        .get_mut()
-                        .unwrap();
-                    // Example files:
-                    let _ = cx.make_node(
-                        &winfsp::U16CString::from_str("test").unwrap(),
-                        false,
-                        Vec::new(),
-                    );
-                    let _ = cx.make_node(
-                        &winfsp::U16CString::from_str("a folder").unwrap(),
-                        true,
-                        Vec::new(),
-                    );
-                    let _ = cx.make_node(
-                        &winfsp::U16CString::from_str("a folder/hello_world.txt").unwrap(),
-                        false,
-                        b"Hello world!".to_vec(),
-                    );
-                }
-                let mut mem_fs = winfsp_memfs::WinFspMemFs::create_host(cx)
-                    .wrap_err("Failed to create WinFsp MemFs file system host")?;
-                mem_fs
-                    .fs
-                    .mount(winfsp::host::MountPoint::NextFreeDrive)
-                    .map_err(|e| color_eyre::eyre::eyre!("{} (HRESULT {})", e.message(), e.code()))
-                    .wrap_err("Failed to mount WinFsp file system")?;
-                mem_fs
-                    .fs
-                    .start()
-                    .wrap_err("Failed to start WinFsp file system")?;
-
-                //winfsp_memfs::WinFspMemFs::create_service(winfsp_memfs::CreationOptions {
-                //    init_token: None,
-                //    mount_point: "C:/WinFsp-MemFs-Test".into(),
-                //    service_name: "test-WinFsp-MemFs".into(),
-                //}).map_err(|e| {
-                //    let report = color_eyre::eyre::eyre!("{e:?}\n{e}");
-                //    if let winfsp::FspError::WIN32(1285) = e {
-                //        report.wrap_err(
-                //            "Underlying error code means ERROR_DELAY_LOAD_FAILED which means we failed to load \
-                //            WinFsp's dynamically linked library (.dll), make sure that WinFsp is correctly installed."
-                //        )
-                //    } else {
-                //        report
-                //    }
-                //}).wrap_err("failed to start WinFsp file system")?;
-
-                log::info!("Press Ctrl+C to exit");
-                loop {
-                    if cancel_signal
-                        .wait_timeout(std::time::Duration::from_millis(100))
-                        .is_err()
-                    {
-                        return Ok(());
-                    }
-                }
-            }
+            Self::TestWinFsp(v) => v.run(cancel_signal),
         }
     }
     pub fn configure_logging(&self) {
@@ -264,11 +197,7 @@ impl Opts {
             Self::Mount(v) => v.common.configure_logging(),
             Self::Diff(v) => v.common.configure_logging(),
             #[cfg(all(windows, feature = "winfsp"))]
-            Self::TestWinFsp => CommonOpt {
-                quiet: 0,
-                verbose: 2,
-            }
-            .configure_logging(),
+            Self::TestWinFsp(v) => v.common.configure_logging(),
         }
     }
 }
@@ -282,31 +211,71 @@ pub struct RsyncableOpts {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum BackupFileType {
-    #[value(name = "auto")]
+    #[value(name = Self::Auto.as_str())]
     Auto,
-    #[value(name = "compressed")]
-    CompressedCsv,
-    #[value(name = "uncompressed")]
-    UncompressedCsv,
+    #[value(name = Self::WizTreeCsv.as_str())]
+    WizTreeCsv,
+    #[value(name = Self::WizTreeCsvGzip.as_str())]
+    WizTreeCsvGzip,
+    #[value(name = Self::QDirStatCache.as_str())]
+    QDirStatCache,
+    #[value(name = Self::QDirStatCacheGzip.as_str())]
+    QDirStatCacheGzip,
+    #[value(name = Self::EDirStatSnapshot.as_str())]
+    EDirStatSnapshot,
+    #[value(name = Self::EDirStatSnapshotZstd.as_str())]
+    EDirStatSnapshotZstd,
 }
 impl BackupFileType {
-    /// Guess backup file type from a file extension (without any leading dots).
-    pub fn from_file_ext(ext: &str) -> Option<Self> {
-        match ext.to_lowercase().as_str() {
-            "gz" => Some(BackupFileType::CompressedCsv),
-            "csv" => Some(BackupFileType::UncompressedCsv),
-            _ => None,
+    /// Guess backup file type from a file name.
+    pub fn from_file_name(name: &str) -> Option<Self> {
+        let name = name.to_lowercase();
+        if name.ends_with(".csv.gz") {
+            Some(BackupFileType::WizTreeCsvGzip)
+        } else if name.ends_with(".csv") {
+            Some(BackupFileType::WizTreeCsv)
+        } else if name.ends_with(".cache.gz") {
+            Some(BackupFileType::QDirStatCacheGzip)
+        } else if name.ends_with(".cache") {
+            Some(BackupFileType::QDirStatCache)
+        } else if name.ends_with(".edst.zst") {
+            Some(BackupFileType::EDirStatSnapshotZstd)
+        } else if name.ends_with(".edst") {
+            Some(BackupFileType::EDirStatSnapshot)
+        } else {
+            None
         }
     }
-    /// Guess backup file type from a path's file extension.
-    pub fn from_file_path_ext(path: impl AsRef<Path>) -> Option<Self> {
-        Self::from_file_ext(path.as_ref().extension()?.to_str()?)
+    /// Guess backup file type from a path's file name (multiple layers of file extensions).
+    pub fn from_file_path(path: impl AsRef<Path>) -> Option<Self> {
+        Self::from_file_name(path.as_ref().file_name()?.to_str()?)
     }
+
+    /// Return an error if the file type is not one of the valid types.
+    pub fn ensure_valid_type(self, valid_types: &[BackupFileType]) -> Result<()> {
+        if valid_types.contains(&self) {
+            Ok(())
+        } else {
+            color_eyre::eyre::bail!(
+                "File type was {self} but only the following formats are supported: {}",
+                valid_types
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::CompressedCsv => "compressed",
-            Self::UncompressedCsv => "uncompressed",
+            Self::WizTreeCsv => "wiztree-csv",
+            Self::WizTreeCsvGzip => "wiztree-csv-gzip",
+            Self::QDirStatCache => "qdirstat-cache",
+            Self::QDirStatCacheGzip => "qdirstat-cache-gzip",
+            Self::EDirStatSnapshot => "edirstat-snapshot",
+            Self::EDirStatSnapshotZstd => "edirstat-snapshot-zstd",
         }
     }
     pub fn all() -> impl Iterator<Item = Self> {
@@ -318,7 +287,15 @@ impl BackupFileType {
                 [$(Self::$name,)*]
             }};
         }
-        IntoIterator::into_iter(all!(Auto, CompressedCsv, UncompressedCsv,))
+        IntoIterator::into_iter(all![
+            Auto,
+            WizTreeCsv,
+            WizTreeCsvGzip,
+            QDirStatCache,
+            QDirStatCacheGzip,
+            EDirStatSnapshot,
+            EDirStatSnapshotZstd,
+        ])
     }
 }
 impl FromStr for BackupFileType {
@@ -340,55 +317,6 @@ impl fmt::Display for BackupFileType {
     }
 }
 
-#[derive(Debug, Args, Clone)]
-pub struct CommonOpt {
-    /// Provide more verbose logging. Can be specified up to 2 times to increase
-    /// verbosity level.
-    #[clap(short, long, action = ArgAction::Count, help_heading = "LOGGING")]
-    verbose: u8,
-    /// Quiet mode, suppresses some logging. Specify once to only show warnings
-    /// and errors. If you specify it 3 times then all logging will be suppressed
-    /// but note that if the program exits with an error info about that will still
-    /// be written to stderr.
-    #[clap(
-        short,
-        long,
-        action = ArgAction::Count,
-        conflicts_with = "verbose",
-        help_heading = "LOGGING"
-    )]
-    quiet: u8,
-}
-impl CommonOpt {
-    /// Enable logging based on specified verbosity arguments.
-    pub fn configure_logging(&self) {
-        let verbosity_level_number = 3_i32 - (self.quiet as i32) + (self.verbose as i32);
-        let verbosity_level = verbosity_level(verbosity_level_number.max(0) as u32);
-        init_logger(verbosity_level);
-
-        if verbosity_level_number < 0 {
-            // You normally won't see this, but it can probably be enabled via environment variables:
-            log::warn!(
-                "Specified logging level {} but 0 is the lowest level",
-                verbosity_level_number
-            )
-        }
-        if verbosity_level_number > 5 {
-            log::warn!(
-                "Specified logging level {} but 5 is the highest level",
-                verbosity_level_number
-            )
-        }
-        log::info!(
-            "Logging with verbosity level: {} - {}",
-            verbosity_level_number.min(5),
-            verbosity_level
-                .map(|level| level.to_string())
-                .unwrap_or_else(|| "Off".to_string())
-        );
-    }
-}
-
 /// Add a note in the error about how to enable backtraces via environment variables.
 pub fn add_backtrace_note_to_error<T>(result: Result<T>) -> Result<T> {
     result.note(
@@ -399,123 +327,4 @@ pub fn add_backtrace_note_to_error<T>(result: Result<T>) -> Result<T> {
             If you want backtraces to be printed with source locations, set RUST_LIB_BACKTRACE=full.\n\
         ",
     )
-}
-
-pub fn verbosity_level(verbose: u32) -> Option<log::Level> {
-    use log::Level::*;
-    Some(match verbose {
-        0 => return None,
-        1 => Error,
-        2 => Warn,
-        3 => Info,
-        4 => Debug,
-        _ => Trace,
-    })
-}
-
-static CURRENT_PROGRESS_BAR: RwLock<Option<WeakProgressBar>> = RwLock::new(None);
-
-pub fn set_progress_bar<'a>(pb: impl Into<Option<&'a ProgressBar>>) {
-    let pb = pb
-        .into()
-        // Don't care about hidden progress bars:
-        .filter(|pb| !pb.is_hidden())
-        .map(|pb| pb.downgrade());
-    *CURRENT_PROGRESS_BAR.write().unwrap() = pb;
-}
-pub fn get_progress_bar() -> Option<ProgressBar> {
-    CURRENT_PROGRESS_BAR.read().unwrap().as_ref()?.upgrade()
-}
-
-pub fn init_logger(default_level: Option<log::Level>) {
-    use chrono::Local;
-    use env_logger::{Builder, Env};
-    use log::Level;
-
-    let default_filter = if let Some(default_level) = default_level {
-        if default_level == Level::Trace {
-            "trace\
-                    ,dav_server=debug\
-                    ,xml=debug\
-                    ,file_system_backup::mount::web_dav_mount=debug"
-                .to_lowercase()
-        } else if default_level == Level::Debug {
-            format!(
-                "{:?}\
-                    ,dav_server=info\
-                    ,xml=info\
-                    ,mft::mft=info",
-                default_level
-            )
-            .to_lowercase()
-        } else {
-            format!("{default_level:?}").to_lowercase()
-        }
-    } else {
-        "off".to_string()
-    };
-    let mut builder = Builder::from_env(Env::new().default_filter_or(default_filter.as_str()));
-
-    builder.format(|formatter, record| {
-        let pg = get_progress_bar().filter(|pb| !pb.is_hidden() && !pb.is_finished());
-        let mut msg = Vec::new();
-        struct Wrapper<T1, T2> {
-            first: Option<T1>,
-            second: T2,
-        }
-        impl<T1, T2> Write for Wrapper<T1, T2>
-        where
-            T1: Write,
-            T2: Write,
-        {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                if let Some(first) = &mut self.first {
-                    first.write(buf)
-                } else {
-                    self.second.write(buf)
-                }
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                if let Some(first) = &mut self.first {
-                    first.flush()
-                } else {
-                    self.second.flush()
-                }
-            }
-        }
-
-        let mut wrapper = Wrapper {
-            first: pg.is_some().then_some(&mut msg),
-            second: formatter,
-        };
-
-        let level_style = wrapper.second.default_level_style(record.level());
-        let bold_style = env_logger::fmt::style::Style::new().bold();
-
-        writeln!(
-            wrapper,
-            " {} {level_style}[{}]{level_style:#}{} {bold_style}({}){bold_style:#}: {}",
-            Local::now().format("%Y-%m-%d %H:%M:%S"),
-            record.level(),
-            match record.level() {
-                Level::Debug | Level::Error | Level::Trace => "",
-                Level::Info | Level::Warn => " ",
-            },
-            record.target(),
-            record.args()
-        )?;
-
-        if let Some(pg) = pg {
-            pg.println(std::str::from_utf8(&msg).expect("log message should be UTF8"));
-        }
-
-        Ok(())
-    });
-
-    builder.init();
-
-    log::trace!(
-        "Default log filter at this level (used if RUST_LOG is not specified): {default_filter}"
-    );
 }

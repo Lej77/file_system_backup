@@ -12,7 +12,10 @@ use indicatif::HumanBytes;
 use crate::utils::{
     WindowsJob, create_progress_bar, possible_wiz_tree_paths, run_wiz_tree, wiz_tree_exe_name,
 };
-use crate::{BackupFileType, CancelSignal, CleanupProcess, CommonOpt, Result, set_progress_bar};
+use crate::{
+    BackupFileType, CancelSignal, CleanupProcess, Result,
+    logging::{CommonOpt, set_progress_bar},
+};
 
 #[derive(Debug, Parser, Clone)]
 pub struct WizTreeOpenOpts {
@@ -72,21 +75,18 @@ impl WizTreeOpenOpts {
             // Guess file type:
             let mut file_type = self.file_type;
             if BackupFileType::Auto == self.file_type
-                && let Some(ext) = self
-                    .input
-                    .as_ref()
-                    .and_then(|i| i.extension())
-                    .and_then(|ext| ext.to_str())
+                && let Some(input) = &self.input
+                && let Some(guessed_type) = BackupFileType::from_file_path(input)
             {
-                let guessed_type = match ext.to_lowercase().as_str() {
-                    "gz" => Some(BackupFileType::CompressedCsv),
-                    "csv" => Some(BackupFileType::UncompressedCsv),
-                    _ => None,
-                };
-                if let Some(guessed) = guessed_type {
-                    file_type = guessed;
-                }
+                file_type = guessed_type;
             }
+
+            if file_type == BackupFileType::Auto {
+                bail!("Failed to determine file type. Specify manually via `--file-type`.");
+            }
+            file_type
+                .ensure_valid_type(&[BackupFileType::WizTreeCsv, BackupFileType::WizTreeCsvGzip])
+                .context("Invalid file type for input")?;
 
             // Open input file / stdin:
             let mut stdin = None;
@@ -172,10 +172,7 @@ impl WizTreeOpenOpts {
             };
 
             match file_type {
-                BackupFileType::Auto => bail!(
-                    "Failed to determine the type of the backup file, please specify it manually via the `--file-type` option"
-                ),
-                BackupFileType::CompressedCsv => {
+                BackupFileType::WizTreeCsvGzip => {
                     let temp_file = make_temp_file(MakeTempFileArgs {
                         prefix: "WizTree-file-index-uncompressed-",
                         info_start: "Decompressing",
@@ -202,7 +199,7 @@ impl WizTreeOpenOpts {
                     temp_path = temp_file.into_temp_path();
                     file_to_open = temp_path.to_path_buf();
                 }
-                BackupFileType::UncompressedCsv => {
+                BackupFileType::WizTreeCsv => {
                     if let Some(input) = &self.input {
                         file_to_open = input.clone();
                     } else {
@@ -233,6 +230,7 @@ impl WizTreeOpenOpts {
                         file_to_open = temp_path.to_path_buf();
                     }
                 }
+                _ => unreachable!("handled this previously"),
             }
         }
 

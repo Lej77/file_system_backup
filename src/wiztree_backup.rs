@@ -21,8 +21,8 @@ use crate::utils::{
     wiz_tree_exe_name,
 };
 use crate::{
-    CancelSignal, CleanupProcess, CommonOpt, FileSystemType, Result, RsyncableOpts,
-    set_progress_bar,
+    CancelSignal, CleanupProcess, FileSystemType, Result, RsyncableOpts,
+    logging::{CommonOpt, set_progress_bar},
 };
 
 #[derive(Debug, Parser, Clone)]
