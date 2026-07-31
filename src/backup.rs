@@ -392,7 +392,12 @@ pub fn scan_using_mft(
             )
         })?;
 
-        match parse_mft(data, custom_root.unwrap_or(scan_path), cancel_signal) {
+        match parse_mft(
+            data,
+            custom_root.unwrap_or(scan_path),
+            Some(scan_path.as_ref()),
+            cancel_signal,
+        ) {
             Ok(index) => return Ok(index),
             Err(e) if attempt + 1 == retries => {
                 return Err(e).context(format!(
@@ -458,6 +463,7 @@ fn nt_time_to_chrono_datetime(nt: u64) -> Option<NaiveDateTime> {
 pub fn parse_mft<T: Read + Seek>(
     mut volume: T,
     root_path: &str,
+    scan_path: Option<&Path>,
     cancel_signal: &CancelSignal,
 ) -> Result<FsIndex> {
     pub struct MftCache<T: Read + Seek> {
@@ -617,10 +623,11 @@ pub fn parse_mft<T: Read + Seek>(
         metadata: FsEntryMetadata,
         name: String,
         parent: u64,
+        size_success: bool,
+        info_success: bool,
     }
 
     let mut entry_map: HashMap<u64, Entry> = HashMap::new();
-    let cluster_size = u64::from(ntfs.cluster_size());
 
     for record in 0u64..total_records {
         cancel_signal.as_error()?;
@@ -630,8 +637,8 @@ pub fn parse_mft<T: Read + Seek>(
             Err(NtfsError::VcnOutOfBoundsInIndexAllocation { .. }) => break,
             Err(NtfsError::InvalidFileRecordNumber { .. }) => break, // read too far
             Err(e) => {
-                return Err(e)
-                    .wrap_err(format!("Failed to parse record {record}/{total_records}",));
+                log::warn!("Failed to parse record {record}/{total_records}: {e}");
+                continue;
             }
         };
 
@@ -640,77 +647,41 @@ pub fn parse_mft<T: Read + Seek>(
             continue;
         }
 
-        let Ok(info) = file.info() else {
-            // Extension records don't have $STANDARD_INFORMATION; skip them.
-            // TODO: find better way to detect extension records.
-            continue;
-        };
+        let info = file.info();
 
         // FIXME: a file can have multiple parents (hard links and so on) so we
         // should handle that better (currently only selects one path per file/folder)
         let Some(Ok(name_attr)) = find_best_name(&file, &mut volume) else {
-            log::debug!("No valid name attribute found for MFT record {record}/{total_records}");
+            if info.is_ok() {
+                // Only warn if record also has $STANDARD_INFORMATION:
+                log::warn!("No valid name attribute found for MFT record {record}/{total_records}");
+            }
             continue;
         };
 
-        let (size, allocated) = if file.is_directory() {
-            (0, 0)
+        let is_dir = file.is_directory();
+        let (size, allocated, size_success) = if is_dir {
+            (0, 0, true)
         } else {
             // Standard $DATA lookup, traverse all attributes (this seamlessly resolves $ATTRIBUTE_LIST entries)
-            let mut attributes = file.attributes();
-            let size_info = loop {
-                let Some(item) = attributes.next(&mut volume) else {
-                    break None;
+            if let Some(Ok(data_item)) = file.data(&mut volume, "")
+                && let Ok(attr) = data_item.to_attribute()
+                && let Ok(value) = attr.value(&mut volume)
+            {
+                let size = value.len();
+                let allocated = match value {
+                    NtfsAttributeValue::Resident(_) => size,
+                    NtfsAttributeValue::NonResident(non_res) => non_res
+                        .data_runs()
+                        .filter_map(Result::ok)
+                        .map(|run| run.allocated_size())
+                        .sum::<u64>(),
+                    NtfsAttributeValue::AttributeListNonResident(_) => size,
                 };
-                let Ok(item) = item else { continue };
-                let Ok(attr) = item.to_attribute() else {
-                    continue;
-                };
-
-                // Look specifically for $DATA attribute
-                let Ok(kind) = attr.ty() else { continue };
-                if kind != NtfsAttributeType::Data {
-                    continue;
-                }
-
-                // We want the unnamed data stream
-                let Some(name) = attr.name().ok() else {
-                    continue;
-                };
-                if name.is_empty() {
-                    let logical_size = attr.value_length();
-
-                    attr.value(&mut volume).unwrap().len();
-                    let allocated_size = if attr.is_resident() {
-                        logical_size
-                    } else if logical_size == 0 {
-                        0
-                    } else if let Ok(val) = attr.value(&mut volume) {
-                        match val {
-                            NtfsAttributeValue::Resident(res) => res.len(),
-                            NtfsAttributeValue::NonResident(non_res) => {
-                                non_res.len().div_ceil(cluster_size) * cluster_size
-                            }
-                            NtfsAttributeValue::AttributeListNonResident(attr_list) => {
-                                attr_list.len().div_ceil(cluster_size) * cluster_size
-                            }
-                        }
-                    } else {
-                        // Non-resident data rounds up to nearest cluster
-                        logical_size.div_ceil(cluster_size) * cluster_size
-                    };
-
-                    break Some((logical_size, allocated_size));
-                } else {
-                    break None;
-                }
-            };
-
-            if let Some(values) = size_info {
-                values
+                (size, allocated, true)
             } else {
                 // TIER 2: Fallback to cached size stored inside the $FILE_NAME attribute
-                // Linux drivers reliably update name_attr.data_size() even when $DATA headers are out of sync!
+                // On Linux this has sometimes allowed getting the correct size
                 let cached_size = name_attr.data_size();
                 let cached_allocated = name_attr.allocated_size();
 
@@ -719,43 +690,56 @@ pub fn parse_mft<T: Read + Seek>(
                         "Fallback to possible stale cached size information for MFT record {record}/{total_records} with file name \"{}\"",
                         name_attr.name().to_string_lossy()
                     );
-                    let allocated = if cached_allocated > 0 {
-                        cached_allocated
-                    } else {
-                        cached_size.div_ceil(cluster_size) * cluster_size
-                    };
-                    (cached_size, allocated)
+                    (cached_size, cached_allocated.max(cached_size), false)
                 } else {
                     // Fallback: If no $DATA attribute exists (e.g. 0-byte or sparse placeholder file)
                     log::warn!(
                         "No size information for MFT record {record}/{total_records} with file name \"{}\"",
                         name_attr.name().to_string_lossy()
                     );
-                    (0, 0)
+                    (0, 0, false)
                 }
             }
         };
 
+        let parent = name_attr.parent_directory_reference().file_record_number();
+        let name = name_attr.name().to_string_lossy();
+
         let metadata = FsEntryMetadata {
             size,
             allocated,
-            modified: nt_time_to_chrono_datetime(info.modification_time().nt_timestamp())
+            modified: info
+                .as_ref()
+                .ok()
+                .and_then(|info| {
+                    nt_time_to_chrono_datetime(info.modification_time().nt_timestamp())
+                })
                 .unwrap_or_default(),
-            attributes: u64::from(info.file_attributes().bits()),
+            attributes: u64::from(
+                info.as_ref()
+                    .map(|info| info.file_attributes().bits())
+                    .unwrap_or(if is_dir {
+                        0x10 // FILE_ATTRIBUTE_DIRECTORY (16)
+                    } else {
+                        0x20 // FILE_ATTRIBUTE_ARCHIVE (32)
+                    }),
+            ),
             files: 0,
             folders: 0,
             drive_capacity: None,
             free_space: None,
             used_space: None,
             reserved_space: None,
-            is_dir: file.is_directory(),
+            is_dir,
             children: None,
         };
 
         let entry_info = Entry {
             metadata,
-            name: name_attr.name().to_string_lossy(),
-            parent: name_attr.parent_directory_reference().file_record_number(),
+            name,
+            parent,
+            size_success,
+            info_success: info.is_ok(),
         };
         log::trace!(
             "Gathered info about MFT record {}/{}: {:?}",
@@ -786,12 +770,37 @@ pub fn parse_mft<T: Read + Seek>(
         lookup_children.len()
     );
 
+    // Fix duplicate records:
+    let mut dup_child = HashMap::new();
+    for children in lookup_children.values() {
+        dup_child.clear();
+        for child_id in children {
+            let child = entry_map.get_mut(child_id).unwrap();
+            if let Some(old_id) = dup_child.insert(child.name.clone(), child_id) {
+                let old = entry_map.remove(old_id).unwrap(); // remove duplicate, we will never emit it.
+                let child = entry_map.get_mut(child_id).unwrap();
+                if old.info_success {
+                    child.metadata.attributes = old.metadata.attributes;
+                    child.metadata.modified = old.metadata.modified;
+                }
+                if old.size_success {
+                    child.metadata.size += old.metadata.size;
+                    child.metadata.allocated += old.metadata.allocated;
+                }
+                // Lets just recalculate these values if possible:
+                child.info_success = false;
+                child.size_success = false;
+            }
+        }
+    }
+
     let root = 5;
 
     let mut full_path = root_path.to_owned();
     if !full_path.ends_with(['/', '\\']) {
         full_path.push('\\');
     }
+    let root_path_len = full_path.len();
 
     let root_entry = entry_map.remove(&root).unwrap();
 
@@ -827,6 +836,43 @@ pub fn parse_mft<T: Read + Seek>(
             *parent.metadata.children.get_or_insert(0) += 1;
 
             full_path.push_str(&child.name);
+
+            // Maybe recover information using OS File APIs:
+            if let Some(scan_path) = scan_path
+                && (!child.size_success || !child.info_success)
+            {
+                // Attempt to get size from file API
+                let file_path = scan_path.join(full_path[root_path_len..].replace("\\", "/"));
+                match std::fs::metadata(&file_path) {
+                    Ok(meta) => {
+                        if !child.size_success {
+                            child.metadata.size = meta.len();
+                            child.metadata.allocated = child.metadata.size;
+                        }
+                        if !child.info_success {
+                            match meta.modified() {
+                                Ok(modified) => {
+                                    child.metadata.modified =
+                                        DateTime::<Utc>::from(modified).naive_utc()
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "Failed to recover last last modification time using OS file API: {e}\
+                                        \n\tFile with invalid information: {file_path:?}"
+                                    )
+                                }
+                            }
+                            child.metadata.attributes = u64::from(get_windows_attributes(&meta));
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to recover information using OS file API: {e}\
+                            \n\tFile with invalid information: {file_path:?}"
+                        );
+                    }
+                }
+            }
 
             let grandchildren = lookup_children.get(child_id);
 

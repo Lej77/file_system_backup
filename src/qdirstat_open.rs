@@ -140,11 +140,11 @@ impl QDirStatOpenOpts {
             // 4. Build in-memory FsIndex
             let fs_index: FsIndex = match file_type {
                 BackupFileType::WizTreeCsv => FsIndex::try_from_csv_records(
-                    WizTreeCsvRecord::parse_compressed_csv(reader),
+                    WizTreeCsvRecord::parse_uncompressed_csv(reader),
                     FsIndexBuildOptions::default(),
                 )?,
                 BackupFileType::WizTreeCsvGzip => FsIndex::try_from_csv_records(
-                    WizTreeCsvRecord::parse_uncompressed_csv(reader),
+                    WizTreeCsvRecord::parse_compressed_csv(reader),
                     FsIndexBuildOptions::default(),
                 )?,
                 _ => unreachable!("handled this earlier"),
