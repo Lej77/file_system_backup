@@ -1,6 +1,6 @@
 [package]
 name = "file_system_backup"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Lej77 <31554212+Lej77@users.noreply.github.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ A tool for saving/managing backups of a file system's index, that is to say the 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["gzip_better", "web_dav", "winfsp", "lexical_sort", "edirstat_backup", "edirstat_stable_toolchain"]
+default = ["gzip_better", "web_dav", "winfsp", "lexical_sort", "edirstat", "edirstat_backup", "edirstat_stable_toolchain"]
 
 gzip_better = ["flate2/zlib-ng"] # This matters a lot for the space saving of the --rsyncable flag
 gzip_rust = ["flate2/rust_backend"] # Avoids the need for a c compiler
@@ -48,9 +48,9 @@ lexical_sort = ["dep:lexical-sort"]
 # Read and write eDirStat snapshots (required to use external eDirStat program) (not implemented)
 edirstat = ["dep:edirstat-core"]
 # Include eDirStat's code to preform backups
-edirstat_backup = ["dep:edirstat", "dep:crossbeam"]
+edirstat_backup = ["edirstat", "dep:edirstat", "dep:crossbeam"]
 # Include eDirStat's GUI code to visualize backups (requires nightly) (not implemented)
-edirstat_visualize = ["dep:edirstat", "edirstat/gui"]
+edirstat_visualize = ["edirstat", "dep:edirstat", "edirstat/gui"]
 # The "extra" branch of eDirStat exposes this feature to allow building on stable rust toolchain
 edirstat_stable_toolchain = ["edirstat/stable", "edirstat-core/stable"]
 

@@ -12,7 +12,7 @@ use flate2::{Compression, write::GzEncoder};
 
 use crate::{
     CancelSignal, Result, RsyncableOpts, WizTreeCsvRecord,
-    edirstat_snapshot::from_edirstat_snapshot,
+    edirstat_snapshot::edirstat_snapshot_to_fs_index,
     fs_index::FsIndexBuildOptions,
     logging::CommonOpt,
     utils::{Rsyncable, create_file},
@@ -225,7 +225,7 @@ impl EDirStatBackupOpts {
         let snapshot = edirstat_backup(&scan_path, self.same_filesystem, cancel_signal)
             .context("eDirStat failed to collect filesystem information")?;
         log::info!("Finished filesystem scan using eDirStat, parsing data");
-        let fs_index = from_edirstat_snapshot(
+        let fs_index = edirstat_snapshot_to_fs_index(
             snapshot,
             FsIndexBuildOptions {
                 recount_children: true,

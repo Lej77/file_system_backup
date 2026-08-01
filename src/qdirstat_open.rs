@@ -72,6 +72,10 @@ impl QDirStatOpenOpts {
                 BackupFileType::WizTreeCsvGzip,
                 BackupFileType::QDirStatCache,
                 BackupFileType::QDirStatCacheGzip,
+                #[cfg(feature = "edirstat")]
+                BackupFileType::EDirStatSnapshotZstd,
+                #[cfg(feature = "edirstat")]
+                BackupFileType::EDirStatSnapshot,
             ])
             .context("Invalid file type for input")?;
 
@@ -139,6 +143,30 @@ impl QDirStatOpenOpts {
         } else {
             // 4. Build in-memory FsIndex
             let fs_index: FsIndex = match file_type {
+                #[cfg(feature = "edirstat")]
+                BackupFileType::EDirStatSnapshotZstd | BackupFileType::EDirStatSnapshot => {
+                    use crate::edirstat_snapshot::{
+                        edirstat_snapshot_to_fs_index, snapshot_from_arena,
+                    };
+
+                    let mut file_bytes = Vec::new();
+                    reader
+                        .read_to_end(&mut file_bytes)
+                        .wrap_err("Failed to read from input")?;
+                    let (arena, string_pool) =
+                        edirstat_core::snapshot::load_snapshot_from_bytes(&file_bytes)
+                            .context("Failed to deserialize eDirStat snapshot")?;
+
+                    edirstat_snapshot_to_fs_index(
+                        snapshot_from_arena(arena, string_pool),
+                        FsIndexBuildOptions {
+                            recount_children: true,
+                            recalculate_folder_size: true,
+                            resort: true,
+                            custom_root: None,
+                        },
+                    )
+                }
                 BackupFileType::WizTreeCsv => FsIndex::try_from_csv_records(
                     WizTreeCsvRecord::parse_uncompressed_csv(reader),
                     FsIndexBuildOptions::default(),
@@ -147,7 +175,7 @@ impl QDirStatOpenOpts {
                     WizTreeCsvRecord::parse_compressed_csv(reader),
                     FsIndexBuildOptions::default(),
                 )?,
-                _ => unreachable!("handled this earlier"),
+                _ => unreachable!("unsupported input format, we checked against this earlier"),
             };
 
             // 5. Setup Gzip Encoder

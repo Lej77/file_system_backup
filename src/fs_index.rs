@@ -1360,6 +1360,10 @@ impl FsCursor {
     /// If `true` then [`Self::full_path`] will include a trailing dot for file
     /// paths that don't have any file extension for better compatibility with
     /// WizTree.
+    ///
+    /// This also affects search such as by [`Self::select_child_by_name`], it
+    /// will select a child if the compared names only differ by a single
+    /// trailing dot.
     pub const fn set_force_file_extension(&mut self, value: bool) {
         self.force_file_ext = value;
     }
@@ -1483,8 +1487,9 @@ impl FsCursor {
 
     /// Move the cursor to a child entry of the current folder based on that
     /// child's name. Returns `false` if the child could **not** be found.
-    pub fn select_child_by_name(&mut self, name: &str, index: &FsIndex) -> bool {
+    pub fn select_child_by_name(&mut self, mut name: &str, index: &FsIndex) -> bool {
         let case_sensitive = self.case_sensitive;
+        let force_file_ext = self.force_file_ext;
 
         let Some(children) = self.current_folder_children(index) else {
             log::trace!(
@@ -1492,14 +1497,37 @@ impl FsCursor {
             );
             return false;
         };
+
+        let mut remove_child_empty_ext = false;
+        if force_file_ext {
+            if let Some(without_empty_ext) = name.strip_suffix('.') {
+                if !without_empty_ext.contains('.') {
+                    // Would have added dot if it wasn't there, so assume it wasn't:
+                    name = without_empty_ext;
+                    // Safe to remove trailing dot from children since if they
+                    // contain other dots they won't match with the searched string
+                    // anyway.
+                    remove_child_empty_ext = true;
+                }
+            } else if !name.contains('.') {
+                // If the child contains more than one dot the names won't match
+                // anyway.
+                remove_child_empty_ext = true;
+            }
+        }
+
         let uni_case_name = UniCase::new(name);
 
         let mut child_id = None;
         for &child in children {
+            let mut child_name = child.file_name(index);
+            if remove_child_empty_ext && let Some(without_ext) = child_name.strip_suffix('.') {
+                child_name = without_ext;
+            }
             let is_match = if case_sensitive {
-                name == child.file_name(index)
+                name == child_name
             } else {
-                uni_case_name == UniCase::new(child.file_name(index))
+                uni_case_name == UniCase::new(child_name)
             };
             if is_match {
                 child_id = Some(child);

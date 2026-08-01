@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "file_system_backup"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "chrono",

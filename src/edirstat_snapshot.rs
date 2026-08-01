@@ -1,13 +1,26 @@
 //! Convert to and from eDirStat snapshots.
 
+use std::sync::Arc;
+
 use chrono::DateTime;
-use edirstat::arena::FileArenaSnapshot;
+use edirstat_core::{
+    arena::{FileArenaSnapshot, NodeStorage, StringPool, precompute_dir_counts},
+    snapshot::PersistentArena,
+};
 
 use crate::fs_index::{
     DEFAULT_PATH_SEPARATOR, FsEntryMetadata, FsIndex, FsIndexBuildOptions, PATH_SEPARATORS,
 };
 
-pub fn from_edirstat_snapshot(
+pub fn snapshot_from_arena(arena: PersistentArena, string_pool: StringPool) -> FileArenaSnapshot {
+    FileArenaSnapshot {
+        dir_counts: Arc::new(precompute_dir_counts(arena.nodes())),
+        nodes: Arc::new(NodeStorage::Mmapped(arena)),
+        string_pool: Arc::new(string_pool),
+    }
+}
+
+pub fn edirstat_snapshot_to_fs_index(
     snapshot: FileArenaSnapshot,
     options: FsIndexBuildOptions<'_>,
 ) -> FsIndex {
@@ -61,7 +74,17 @@ pub fn from_edirstat_snapshot(
             } else {
                 0
             },
-            folders: 0,
+            folders: if is_dir {
+                u64::from(
+                    snapshot
+                        .dir_counts
+                        .get(node_index as usize)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            } else {
+                0
+            },
             is_dir,
             children: None,
             drive_capacity: None,

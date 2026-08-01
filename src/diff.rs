@@ -66,6 +66,14 @@ pub struct DiffOpts {
         help_heading = "PROCESSING"
     )]
     pub filter: DiffFilter,
+    /// WizTree appends a dot to filenames without any file extensions. This
+    /// option considers an empty file extension the same as no file extension
+    /// and so ignores any differences that occur because of this quirk.
+    #[clap(
+        long,
+        help_heading = "PROCESSING"
+    )]
+    pub ignore_empty_file_extension: bool,
 
     /// Overwrite the output file if it already exists.
     #[clap(
@@ -129,13 +137,47 @@ impl DiffOpts {
             )
         }
         file_type
-            .ensure_valid_type(&[BackupFileType::WizTreeCsv, BackupFileType::WizTreeCsvGzip])
+            .ensure_valid_type(&[
+                BackupFileType::WizTreeCsv,
+                BackupFileType::WizTreeCsvGzip,
+                #[cfg(feature = "edirstat")]
+                BackupFileType::EDirStatSnapshotZstd,
+                #[cfg(feature = "edirstat")]
+                BackupFileType::EDirStatSnapshot,
+            ])
             .context("Invalid file type for input")?;
 
         let mut file = File::open(input)
             .wrap_err_with(|| format!(r#"failed to open input file at: "{}""#, input.display()))?;
 
         let fs_index: FsIndex = match file_type {
+            #[cfg(feature = "edirstat")]
+            BackupFileType::EDirStatSnapshotZstd | BackupFileType::EDirStatSnapshot => {
+                use crate::edirstat_snapshot::{
+                    edirstat_snapshot_to_fs_index, snapshot_from_arena,
+                };
+
+                let mut file_bytes = Vec::new();
+                file.read_to_end(&mut file_bytes).wrap_err_with(|| {
+                    format!(
+                        r#"failed to read from input file at: "{}""#,
+                        input.display()
+                    )
+                })?;
+                let (arena, string_pool) =
+                    edirstat_core::snapshot::load_snapshot_from_bytes(&file_bytes)
+                        .context("Failed to deserialize eDirStat snapshot file")?;
+
+                edirstat_snapshot_to_fs_index(
+                    snapshot_from_arena(arena, string_pool),
+                    FsIndexBuildOptions {
+                        recount_children: true,
+                        recalculate_folder_size: true,
+                        resort: true,
+                        custom_root: None,
+                    },
+                )
+            }
             BackupFileType::WizTreeCsvGzip => {
                 let mut data = Vec::new();
                 file.read_to_end(&mut data)
@@ -204,7 +246,7 @@ impl DiffOpts {
             &mut stdout_guard
         };
 
-        filter_fs_index(&old, &mut new, self.filter);
+        filter_fs_index(&old, &mut new, self.filter, self.ignore_empty_file_extension);
 
         let output_msg = if let Some(path) = &output_path {
             format!(r#"a file at "{}""#, path.display())
@@ -245,7 +287,7 @@ impl DiffOpts {
     }
 }
 
-pub fn filter_fs_index(old: &FsIndex, new: &mut FsIndex, filter: DiffFilter) {
+pub fn filter_fs_index(old: &FsIndex, new: &mut FsIndex, filter: DiffFilter, ignore_empty_file_ext: bool) {
     let mut parents = Vec::with_capacity(100);
     struct ParentInfo {
         new_id: FsEntryId,
@@ -368,6 +410,11 @@ pub fn filter_fs_index(old: &FsIndex, new: &mut FsIndex, filter: DiffFilter) {
                 .root()
                 .and_then(|id| id.load_metadata(old).map(|info| (id, info))),
         });
+    }
+
+    if ignore_empty_file_ext {
+        old_cursor.set_force_file_extension(true);
+        new_cursor.set_force_file_extension(true);
     }
 
     new_cursor.advance(new); // skip root (i.e. always keep it)
