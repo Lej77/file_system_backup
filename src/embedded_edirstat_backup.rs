@@ -270,27 +270,21 @@ impl EDirStatBackupOpts {
 }
 
 pub fn can_scan_using_mft(root_path: &Path) -> bool {
-    let Some(fs_type) = edirstat::mft::get_fs_type(root_path) else {
+    if !edirstat::engine::mft::is_ntfs(root_path) {
         return false;
     };
-    if !edirstat::mft::is_ntfs_type(&fs_type) {
-        return false;
-    };
-    let Some(_volume_path) = edirstat::mft::get_volume_path(root_path) else {
-        return false;
-    };
-    #[cfg(windows)]
-    {
-        is_elevated::is_elevated()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::fs::File::open(_volume_path).is_ok()
-    }
-    #[cfg(not(any(target_os = "linux", windows)))]
-    {
-        false
-    }
+    let can_do_raw_scan =
+        edirstat::engine::mft::get_volume_path(root_path).is_some_and(|_volume_path| {
+            cfg_select! {
+                windows => is_elevated::is_elevated(),
+                target_os = "linux" => std::fs::File::open(_volume_path).is_ok(),
+                _ => false
+            }
+        });
+    can_do_raw_scan
+        || (cfg!(target_os = "linux")
+            && edirstat::engine::mft::find_mft_file_at_mount(root_path)
+                .is_some_and(|mft| std::fs::File::open(mft).is_ok()))
 }
 
 pub fn edirstat_backup(

@@ -1443,8 +1443,8 @@ dependencies = [
 
 [[package]]
 name = "edirstat"
-version = "2.0.1-extra.1"
-source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#80e3c00cb28442a03607b2a194578c2bf68dd1e4"
+version = "2.0.1-extra.2"
+source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.2#69dacbd5da368774f8648ecb903b4e1b3c15882f"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1456,6 +1456,7 @@ dependencies = [
  "edirstat-core",
  "edirstat-gui",
  "eframe",
+ "file-id",
  "parking_lot",
  "rayon",
  "smallvec",
@@ -1464,8 +1465,8 @@ dependencies = [
 
 [[package]]
 name = "edirstat-core"
-version = "2.0.1-extra.1"
-source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#80e3c00cb28442a03607b2a194578c2bf68dd1e4"
+version = "2.0.1-extra.2"
+source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.2#69dacbd5da368774f8648ecb903b4e1b3c15882f"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -1482,8 +1483,8 @@ dependencies = [
 
 [[package]]
 name = "edirstat-gui"
-version = "2.0.1-extra.1"
-source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.1#80e3c00cb28442a03607b2a194578c2bf68dd1e4"
+version = "2.0.1-extra.2"
+source = "git+https://github.com/Lej77/edirstat.git?tag=v2.0.1-extra.2#69dacbd5da368774f8648ecb903b4e1b3c15882f"
 dependencies = [
  "ahash",
  "atomic-progress",
@@ -1923,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "file_system_backup"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bytes",
  "chrono",
