@@ -201,10 +201,13 @@ impl DiffOpts {
         let old = Self::load_backup_file(&self.old, self.old_file_type).wrap_err_with(|| {
             format!("Failed to load old backup file at {}", self.old.display())
         })?;
+        log::info!("Loaded old input from: {:?}", self.old);
+
         let mut new =
             Self::load_backup_file(&self.new, self.new_file_type).wrap_err_with(|| {
                 format!("Failed to load new backup file at {}", self.new.display())
             })?;
+        log::info!("Loaded new input from: {:?}", self.new);
 
         if !self.uncompressed
             && let Some(level) = self.compression

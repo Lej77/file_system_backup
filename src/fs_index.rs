@@ -1173,9 +1173,14 @@ impl FsIndex {
                     }
                     // New subfolder item (should never happen since info about
                     // the folder comes before its children):
-                    (Some(descendant), None) => unreachable!(
-                        "child entry without first visiting its parent is not supported, \
-                        descendant: {descendant:?}, tracked parents: {parents:?}",
+                    (Some(descendant), None) => panic!(
+                        "child entry without first visiting its parent is not supported\n\
+                        \tmissing parent: {descendant:?}\n\
+                        \ttracked parents: {parents:#?}\n\
+                        \tPrevious folder: {:?}\n\
+                        \tNew path to add: {:?}",
+                        parents.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join("/"),
+                        item.file_name,
                     ),
                     // Check that current parent folder has same name as the one in the item:
                     (Some(new), Some(old)) => {
