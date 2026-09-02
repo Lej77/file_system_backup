@@ -40,6 +40,7 @@ This CLI also has inbuilt support for some operations in order to function witho
 - The `embedded-e-dir-stat-backup` command works without 3rd party programs by embedding the code from a [fork](https://github.com/Lej77/edirstat/tree/extra) of the [`eDirStat` project](github.com/xangelix/edirstat) inside this executable.
   - Since it reuses the snapshot creation code this command should be just as good at file indexing as `eDirStat` itself.
   - This command supports fast scanning of NTFS drives using MFT on both Windows and Linux.
+    - On Linux it can even usually perform such a fast scan without any extra permissions.
 
 ### Fast scanning of NTFS drives using MFT
 
